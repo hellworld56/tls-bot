@@ -3,66 +3,43 @@ import time
 
 
 def wait_for_available_slot_and_click(page):
-    print("⏳ Waiting for available slot...")
+    print("Waiting for standard appointment slot...")
 
     while True:
         try:
-            # Look for visible buttons with class including 'available'
-            slot_btns = page.locator("button[class*='available']:visible")
-            if slot_btns.count() > 0:
-                slot_btn = slot_btns.first
-                slot_btn.wait_for(state="visible", timeout=5000)
-                slot_text = slot_btn.inner_text().strip()
-                slot_btn.click()
-                print(f"✅ Clicked available slot: {slot_text}")
-                return
-            else:
-                print("❌ No available slots found.")
-        except Exception as e:
-            print("⚠️ Error while checking slots:", e)
+            slot_buttons = page.locator("button[data-testid='btn-available-slot']:visible")
+            count = slot_buttons.count()
 
-        print("🔁 Retrying in 15s...")
+            if count > 0:
+                for i in range(count):
+                    button = slot_buttons.nth(i)
+                    label_span = button.locator("span.sr-only")
+
+                    if label_span.count() > 0:
+                        label_text = label_span.inner_text().strip().lower()
+
+                        if "standard appointment" in label_text:
+                            button.wait_for(state="visible", timeout=3000)
+                            time_text = button.inner_text().strip()
+                            button.click()
+                            print(f"Clicked standard appointment slot: {time_text}")
+                            return
+
+                print("No standard appointment slots available right now.")
+            else:
+                print("No available slot buttons found.")
+        except Exception as e:
+            print(f"Error checking for standard slot: {e}")
+
+        print("Retrying in 15s...")
         time.sleep(15)
         page.reload()
         page.wait_for_load_state("networkidle")
 
 
-def click_confirmation_button(page):
-    try:
-        page.wait_for_timeout(2000)  # allow any modal to appear
-
-        visible_buttons = page.locator("button:visible")
-        count = visible_buttons.count()
-        print(f"🔍 Found {count} visible button(s).")
-
-        for i in range(count):
-            btn = visible_buttons.nth(i)
-            try:
-                text = btn.inner_text().strip().lower()
-                if any(word in text for word in ["confirm", "continue", "ok", "yes", "submit", "accept", "book"]):
-                    if not btn.is_disabled():
-                        btn.click()
-                        print(f"✅ Clicked confirmation button: '{text}'")
-                        return
-            except:
-                continue
-
-        if count >= 2:
-            fallback_btn = visible_buttons.nth(1)
-            if not fallback_btn.is_disabled():
-                fallback_btn.click()
-                print("⚠️ Fallback: Clicked second visible button.")
-            else:
-                print("⚠️ Fallback button was disabled.")
-        else:
-            print("❌ Not enough buttons found in modal.")
-    except Exception as e:
-        print("❌ Error during popup confirmation:", e)
-
-
 def login_and_book():
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=False)
         context = browser.new_context()
         page = context.new_page()
 
@@ -76,7 +53,19 @@ def login_and_book():
         page.fill("input[name='password']", "Anas@9090")
         page.click("button:has-text('Login')")
         page.wait_for_load_state("networkidle")
-        print("✅ Logged in")
+        print("Logged in")
+
+        try:
+            print("Waiting for country selection...")
+
+            target_p = page.locator("p.whitespace-nowrap", has_text="United Kingdom")
+            target_p.wait_for(state="visible", timeout=15000)
+            clickable_card = target_p.locator("..").locator("..")
+            clickable_card.click()
+            print("Clicked card containing 'United Kingdom'")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            print("Failed to click country card:", e)
 
         # Step 2: Click "Select"
         select_btn = page.locator("button:has-text('Select')").nth(1)
@@ -84,46 +73,58 @@ def login_and_book():
         select_btn.click()
         page.wait_for_load_state("networkidle")
 
-        # Step 3: Click "Continue"
-        page.locator("a:has-text('Continue')").click()
-        page.wait_for_load_state("networkidle")
-        print("➡️ Reached appointment calendar page")
+        # Optional: Try clicking "Continue" link if it appears
+        for _ in range(5):  # Retry 5 times
+            try:
+                continue_btn = page.locator("a:has-text('Continue')")
+                if continue_btn.count() > 0 and continue_btn.first.is_visible():
+                    continue_btn.first.click()
+                    page.wait_for_load_state("networkidle")
+                    print("Clicked 'Continue' and moved to next step")
+                    break
+                else:
+                    print("'Continue' button not visible yet. Waiting...")
+                    time.sleep(2)
+            except Exception as e:
+                print("Retry error while looking for 'Continue':", e)
 
-        # Step 4: Wait for and click available slot
+        # Step 3: Wait for and click appointment slot
         wait_for_available_slot_and_click(page)
 
-        # Step 5: Click "Book your appointment"
+        # Step 4: Click "Book your appointment"
         try:
             book_btn = page.locator("button:has-text('Book your appointment')")
             book_btn.wait_for(state="visible", timeout=10000)
 
             while book_btn.is_disabled():
-                print("⏳ Waiting for 'Book your appointment' button to enable...")
+                print("Waiting for 'Book your appointment' button to enable...")
                 time.sleep(1)
 
             book_btn.click()
-            print("🎯 Clicked 'Book your appointment'")
-
-            # Step 6: Handle confirmation popup
-            click_confirmation_button(page)
+            print("Clicked 'Book your appointment'")
 
         except Exception as e:
-            print("❌ Could not click 'Book your appointment':", e)
+            print("Could not click 'Book your appointment':", e)
 
-        
-        # Optional: Wait a few seconds before closing (to allow any final steps to complete)
-        print("⏳ Waiting for final confirmation or redirects...")
-        time.sleep(10)
+        # Step 5: Detect booking confirmation (redirect or success message)
+        print("Waiting for final confirmation or redirects...")
+        time.sleep(5)
 
-        # Then close the browser and exit
+        try:
+            if page.url.endswith("/confirmation") or "/confirmation" in page.url:
+                print("Reached confirmation page.")
+            elif page.locator("text=Your appointment has been booked").count() > 0:
+                print("Appointment confirmed via message.")
+            else:
+                print("No clear confirmation detected.")
+        except Exception as e:
+            print("Could not verify confirmation:", e)
+
+        # Step 6: Exit
+        time.sleep(5)
         browser.close()
-        print("✅ Booking complete. Browser closed. Exiting script.")
+        print("Booking complete. Browser closed. Exiting script.")
 
-        # page.pause()
-    
 
 # Run it
-# login_and_book()
-
-if __name__ == "__main__":
-    login_and_book()
+login_and_book()
